@@ -40,6 +40,7 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
   const [findEst, setFindEst] = useState<{ count: number; cost: number | null; model: string } | null>(null);
   const [banner, setBanner] = useState<{ kind: string; job: JobState } | null>(null);
   const [showImport, setShowImport] = useState(true);
+  const [importing, setImporting] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeKind = useRef<string | null>(null);
 
@@ -109,13 +110,36 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
   // ---- import ----
   const importFile = async (file: File) => {
     try {
+      setImporting('Reading file…');
       const text = await file.text();
-      const res = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: text });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      alert(`Imported ${data.imported.toLocaleString()} leads (${data.skipped} duplicates/blank skipped).`);
+      // Parse in the browser, then upload in batches. Vercel caps a single
+      // request body at ~4.5 MB, so a big followers list must be chunked.
+      const { parse } = await import('csv-parse/browser/esm/sync');
+      let records: Record<string, string>[];
+      try {
+        records = parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true });
+      } catch (err) {
+        throw new Error(`CSV parse failed: ${(err as Error).message}`);
+      }
+      if (!records.length) throw new Error('No rows found in CSV.');
+
+      const BATCH = 2000;
+      let imported = 0, skipped = 0;
+      for (let i = 0; i < records.length; i += BATCH) {
+        setImporting(`Uploading ${Math.min(i + BATCH, records.length).toLocaleString()} of ${records.length.toLocaleString()}…`);
+        const res = await fetch('/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ records: records.slice(i, i + BATCH) })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        imported += data.imported; skipped += data.skipped;
+      }
+      setImporting(null);
+      alert(`Imported ${imported.toLocaleString()} leads (${skipped.toLocaleString()} duplicates/blank skipped).`);
       await loadStats(); await loadLeads();
-    } catch (err) { alert((err as Error).message); }
+    } catch (err) { setImporting(null); alert((err as Error).message); }
   };
 
   const stopJob = () =>
@@ -203,7 +227,7 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
       {view === 'leads' && (
         <main className="view">
           {(showImport) && (
-            <ImportZone onFile={importFile} onClose={() => setShowImport(false)} hasLeads={Boolean(stats?.total)} />
+            <ImportZone onFile={importFile} onClose={() => setShowImport(false)} hasLeads={Boolean(stats?.total)} busy={importing} />
           )}
           <section className="hero">
             <h2>Who are you looking for?</h2>
@@ -310,20 +334,24 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
 }
 
 // ---- Import zone ----
-function ImportZone({ onFile, onClose, hasLeads }: { onFile: (f: File) => void; onClose: () => void; hasLeads: boolean }) {
+function ImportZone({ onFile, onClose, hasLeads, busy }: { onFile: (f: File) => void; onClose: () => void; hasLeads: boolean; busy: string | null }) {
   const [drag, setDrag] = useState(false);
   return (
     <section className={`import-zone ${drag ? 'dragover' : ''}`}
-      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragOver={(e) => { if (busy) return; e.preventDefault(); setDrag(true); }}
       onDragLeave={() => setDrag(false)}
-      onDrop={(e) => { e.preventDefault(); setDrag(false); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); }}>
+      onDrop={(e) => { e.preventDefault(); setDrag(false); if (busy) return; if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); }}>
       <div>
         <strong>Import your followers list</strong>
         <p>Drop a CSV export here (Circleboom, Followerwonk, twtData, or any CSV with a username column). Duplicates are skipped.</p>
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <label className="btn primary">Choose CSV<input type="file" accept=".csv,text/csv" hidden onChange={(e) => { if (e.target.files?.[0]) onFile(e.target.files[0]); }} /></label>
-        {hasLeads ? <button className="btn ghost" onClick={onClose}>Close</button> : null}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {busy ? (
+          <span className="import-busy">{busy}</span>
+        ) : (
+          <label className="btn primary">Choose CSV<input type="file" accept=".csv,text/csv" hidden onChange={(e) => { if (e.target.files?.[0]) onFile(e.target.files[0]); }} /></label>
+        )}
+        {hasLeads && !busy ? <button className="btn ghost" onClick={onClose}>Close</button> : null}
       </div>
     </section>
   );

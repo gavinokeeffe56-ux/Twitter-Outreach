@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server';
-import { parse } from 'csv-parse/sync';
-import { sql } from 'drizzle-orm';
 import { db, leads } from '@/lib/db';
 import { requireUser, isResponse } from '@/lib/api';
 import { scoreLead } from '@/lib/heuristics';
@@ -24,16 +22,18 @@ export async function POST(req: Request) {
   const user = await requireUser();
   if (isResponse(user)) return user;
 
-  const csvText = await req.text();
-  if (!csvText.trim()) return NextResponse.json({ error: 'Empty file.' }, { status: 400 });
-
-  let records: Record<string, string>[];
+  // The CSV is parsed in the browser and uploaded in batches as JSON, so a
+  // large followers list never exceeds the serverless request-body limit.
+  let body: unknown;
   try {
-    records = parse(csvText, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true });
-  } catch (err) {
-    return NextResponse.json({ error: `CSV parse failed: ${(err as Error).message}` }, { status: 400 });
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 });
   }
-  if (!records.length) return NextResponse.json({ error: 'No rows found in CSV.' }, { status: 400 });
+  const records = (body as { records?: unknown })?.records;
+  if (!Array.isArray(records) || !records.length) {
+    return NextResponse.json({ error: 'No rows found in CSV.' }, { status: 400 });
+  }
 
   const headers = Object.keys(records[0]);
   const normalized = headers.map(norm);
