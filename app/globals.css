@@ -168,13 +168,15 @@ tbody tr:hover { background: var(--accent-soft); }
 select.stage-select { padding: 4px 6px; border-radius: 6px; font-size: 12px; }
 .pager { display: flex; align-items: center; gap: 12px; justify-content: center; padding: 14px; color: var(--muted); font-size: 13px; }
 
-.board { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; padding-bottom: 20px; }
-.col { min-width: 240px; width: 240px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; flex-shrink: 0; }
-.col h3 { margin: 0; padding: 10px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
-.col-cards { padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 60px; max-height: 70vh; overflow-y: auto; }
-.card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px; cursor: grab; }
-.card .card-meta { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
-.col.dragover { outline: 2px solid var(--accent); }
+/* Pipeline: spreadsheet view with stage tabs */
+.stage-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.stage-tab { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.stage-tab span { font-weight: 500; margin-left: 4px; font-size: 12px; opacity: .8; }
+.stage-tab:hover { color: var(--text); }
+.stage-tab.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.why-cell { max-width: 430px; font-size: 13px; line-height: 1.45; }
+.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.co-name { font-weight: 600; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 30; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 440px; max-width: 92vw; background: var(--surface); border-left: 1px solid var(--border); z-index: 31; overflow-y: auto; padding: 20px; box-shadow: -4px 0 20px rgba(0,0,0,.15); }

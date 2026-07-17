@@ -326,7 +326,7 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
         </main>
       )}
 
-      {view === 'board' && <Board onOpen={setOpenLead} onChanged={refresh} />}
+      {view === 'board' && <Pipeline onOpen={setOpenLead} onChanged={refresh} />}
       {view === 'dm' && <TemplatePanel channel="dm" />}
       {view === 'email' && <TemplatePanel channel="email" />}
       {view === 'api' && <ApiHubPanel />}
@@ -390,48 +390,81 @@ function ImportZone({ onFile, onClose, hasLeads, busy }: { onFile: (f: File) => 
   );
 }
 
-// ---- Board ----
-function Board({ onOpen, onChanged }: { onOpen: (l: Lead) => void; onChanged: () => void }) {
-  const [cols, setCols] = useState<Record<string, { rows: Lead[]; total: number }>>({});
-  const load = useCallback(async () => {
-    const out: Record<string, { rows: Lead[]; total: number }> = {};
-    for (const [stage] of STAGES) {
-      const d = await api(`/api/leads?stage=${stage}&pageSize=200&sort=ai_score`);
-      out[stage] = { rows: d.rows, total: d.total };
-    }
-    setCols(out);
+// ---- Pipeline: spreadsheet-style view of your working leads ----
+export function Pipeline({ onOpen, onChanged }: { onOpen: (l: Lead) => void; onChanged: () => void }) {
+  const [stage, setStage] = useState('qualified');
+  const [rows, setRows] = useState<Lead[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+
+  const loadCounts = useCallback(async () => {
+    const out: Record<string, number> = {};
+    await Promise.all(STAGES.map(async ([s]) => {
+      const d = await api(`/api/leads?stage=${s}&pageSize=1`);
+      out[s] = d.total;
+    }));
+    setCounts(out);
   }, []);
+  const load = useCallback(async () => {
+    const p = new URLSearchParams({ page: String(page), pageSize: '100', sort: 'ai_score' });
+    if (stage) p.set('stage', stage);
+    const d = await api(`/api/leads?${p}`);
+    setRows(d.rows); setTotal(d.total);
+  }, [stage, page]);
+  useEffect(() => { loadCounts(); }, [loadCounts]);
   useEffect(() => { load(); }, [load]);
+
+  const allTotal = Object.values(counts).reduce((a, b) => a + b, 0);
+  const moveStage = async (id: number, s: string) => {
+    await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ stage: s }) });
+    load(); loadCounts(); onChanged();
+  };
 
   return (
     <main className="view">
-      <div className="board">
-        {STAGES.map(([stage, title]) => (
-          <div key={stage} className="col"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={async (e) => {
-              const id = e.dataTransfer.getData('text/plain');
-              await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ stage }) });
-              load(); onChanged();
-            }}>
-            <h3>{title}<span>{cols[stage]?.total ?? 0}</span></h3>
-            <div className="col-cards">
-              {(cols[stage]?.rows || []).map((l) => (
-                <div key={l.id} className="card" draggable
-                  onDragStart={(e) => e.dataTransfer.setData('text/plain', String(l.id))}
-                  onClick={() => onOpen(l)}>
-                  <div className="lead-handle">@{l.handle}</div>
-                  <div className="lead-name">{l.aiCompany || l.name}</div>
-                  <div className="card-meta">
-                    {l.aiFit ? <span className={`badge ${l.aiFit}`}>{l.aiFit}</span> : null}
-                    <span className={`score ${scoreClass(l.aiScore ?? l.hScore)}`}>{l.aiScore ?? l.hScore}</span>
-                    {l.email ? <Icon name="email" size={14} /> : null}{l.gmailDraftId ? <Icon name="draft" size={14} /> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+      <div className="stage-tabs">
+        <button className={`stage-tab ${stage === '' ? 'active' : ''}`} onClick={() => { setStage(''); setPage(1); }}>All <span>{allTotal.toLocaleString()}</span></button>
+        {STAGES.map(([v, t]) => (
+          <button key={v} className={`stage-tab ${stage === v ? 'active' : ''}`} onClick={() => { setStage(v); setPage(1); }}>{t} <span>{(counts[v] ?? 0).toLocaleString()}</span></button>
         ))}
+      </div>
+      <table>
+        <thead><tr><th>Lead</th><th>Company &amp; role</th><th>Match</th><th>Why they&apos;re a good lead</th><th>Stage</th><th></th></tr></thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan={6} className="empty">{stage === 'qualified'
+              ? 'No qualified leads yet — run a find on the Leads tab and strong matches land here automatically.'
+              : 'Nothing in this stage yet.'}</td></tr>
+          ) : rows.map((l) => (
+            <tr key={l.id} onClick={() => onOpen(l)}>
+              <td>
+                <div className="lead-handle">{l.name || '@' + l.handle}</div>
+                <div className="lead-name">@{l.handle} · {fmtNum(l.followers)} followers</div>
+              </td>
+              <td>
+                <div className="co-name">{l.aiCompany || <span className="muted">—</span>}</div>
+                <div className="lead-name">{l.aiRole || ''}</div>
+              </td>
+              <td>{l.classifiedAt ? <>
+                <div className="match-line"><span className={`badge ${l.aiFit}`}>{l.aiFit}</span> <span className={`score ${scoreClass(l.aiScore)}`}>{l.aiScore}</span></div>
+                {l.aiConfidence ? <span className={`conf conf-${l.aiConfidence}`}>{l.aiConfidence}</span> : null}
+              </> : <span className="muted">not analyzed</span>}</td>
+              <td className="why-cell">{l.aiReasoning ? <span className="clamp2">{l.aiReasoning}</span> : <span className="muted">—</span>}</td>
+              <td onClick={(e) => e.stopPropagation()}>
+                <select className="stage-select" value={l.stage} onChange={(e) => moveStage(l.id, e.target.value)}>
+                  {STAGES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                </select>
+              </td>
+              <td><div className="row-ic">{l.email ? <Icon name="email" size={15} /> : null}{l.draft ? <Icon name="dm" size={15} /> : null}{l.gmailDraftId ? <Icon name="draft" size={15} /> : null}</div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="pager">
+        <button className="btn ghost small" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Prev</button>
+        <span>Page {page} of {Math.max(1, Math.ceil(total / 100))} · {total.toLocaleString()} leads</span>
+        <button className="btn ghost small" disabled={page >= Math.ceil(total / 100)} onClick={() => setPage((p) => p + 1)}>Next →</button>
       </div>
     </main>
   );
