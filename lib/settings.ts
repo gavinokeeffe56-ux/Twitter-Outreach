@@ -50,8 +50,10 @@ export async function getResolvedSettings(userId: string): Promise<ResolvedSetti
     model: row.model,
     openaiBaseUrl: row.openaiBaseUrl,
     openaiModel: row.openaiModel,
-    anthropicKey: decrypt(row.anthropicKeyEnc),
-    openaiKey: decrypt(row.openaiKeyEnc),
+    // Fall back to a shared owner key set in the environment, so the deploy
+    // owner can run the AI without pasting a key into the Settings UI.
+    anthropicKey: decrypt(row.anthropicKeyEnc) || process.env.ANTHROPIC_API_KEY || '',
+    openaiKey: decrypt(row.openaiKeyEnc) || process.env.OPENAI_API_KEY || '',
     hunterKey: decrypt(row.hunterKeyEnc),
     tombaKey: decrypt(row.tombaKeyEnc),
     tombaSecret: decrypt(row.tombaSecretEnc)
