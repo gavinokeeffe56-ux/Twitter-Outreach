@@ -23,18 +23,19 @@ export interface JobState {
   status: 'idle' | 'running' | 'done' | 'error';
   total: number;
   done: number;
-  found: number;   // email hunt
+  found: number;   // classify: strong matches; email hunt: emails found
   drafted: number; // gmail push
+  target: number;  // stop early once `found` reaches this (0 = no target)
   errors: number;
   lastError: string | null;
   startedAt: string | null;
 }
 
 const jobKey = (userId: string, kind: JobKind) => `job:${userId}:${kind}`;
-const EMPTY: JobState = { status: 'idle', total: 0, done: 0, found: 0, drafted: 0, errors: 0, lastError: null, startedAt: null };
+const EMPTY: JobState = { status: 'idle', total: 0, done: 0, found: 0, drafted: 0, target: 0, errors: 0, lastError: null, startedAt: null };
 
-export async function initJob(userId: string, kind: JobKind, total: number) {
-  const state: JobState = { ...EMPTY, status: 'running', total, startedAt: new Date().toISOString() };
+export async function initJob(userId: string, kind: JobKind, total: number, target = 0) {
+  const state: JobState = { ...EMPTY, status: 'running', total, target, startedAt: new Date().toISOString() };
   // Hash fields let workers INCR counters atomically without read-modify-write.
   await redis.hset(jobKey(userId, kind), state as unknown as Record<string, unknown>);
   await redis.expire(jobKey(userId, kind), 60 * 60 * 24);
@@ -49,6 +50,7 @@ export async function getJob(userId: string, kind: JobKind): Promise<JobState> {
     done: Number(raw.done) || 0,
     found: Number(raw.found) || 0,
     drafted: Number(raw.drafted) || 0,
+    target: Number(raw.target) || 0,
     errors: Number(raw.errors) || 0,
     lastError: raw.lastError ? String(raw.lastError) : null,
     startedAt: raw.startedAt ? String(raw.startedAt) : null
@@ -68,9 +70,11 @@ export async function advanceJob(
   if (delta.errors) p.hincrby(k, 'errors', delta.errors);
   if (delta.lastError) p.hset(k, { lastError: delta.lastError });
   const res = await p.exec();
-  // The `done` hincrby returns the new total; check for completion.
+  // Flip to `done` when every batch has run — or early, once the target
+  // number of matches is found (remaining queued batches then no-op).
   const state = await getJob(userId, kind);
-  if (state.status === 'running' && state.done >= state.total) {
+  if (state.status === 'running' &&
+      (state.done >= state.total || (state.target > 0 && state.found >= state.target))) {
     await redis.hset(k, { status: 'done' });
   }
   return res;

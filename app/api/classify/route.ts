@@ -41,13 +41,19 @@ export async function POST(req: Request) {
       .onConflictDoUpdate({ target: settings.userId, set: { targetDescription: body.target.trim() } });
   }
   const minHScore = Number(body.minHScore ?? 15);
-  const limit = Math.min(20000, Number(body.limit ?? 1500));
+  // Optional match target ("find my 200 best"): scan a pool ~10x the target in
+  // signal-score order and stop early once the target is found. Re-running
+  // continues into the next slice, since classified leads are excluded.
+  const target = Math.max(0, Math.min(5000, Math.floor(Number(body.count ?? 0)) || 0));
+  const limit = target > 0
+    ? Math.max(1000, Math.min(20000, target * 10))
+    : Math.min(20000, Number(body.limit ?? 1500));
   const ids = (await db.select({ id: leads.id }).from(leads).where(eligible(user, minHScore))
     .orderBy(desc(leads.hScore)).limit(limit)).map((r) => r.id);
   if (!ids.length) return NextResponse.json({ error: 'No unclassified leads match. Try importing a list first, or lower the signal threshold.' }, { status: 400 });
 
-  await startJob(user, 'classify', ids, '/api/qstash/classify', 'classify', processClassifyBatch);
-  return NextResponse.json({ started: true, count: ids.length });
+  await startJob(user, 'classify', ids, '/api/qstash/classify', 'classify', processClassifyBatch, target);
+  return NextResponse.json({ started: true, count: ids.length, target });
 }
 
 // Stop

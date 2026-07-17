@@ -6,19 +6,25 @@ import { getResolvedSettings } from './settings';
 import { classifyLead, generateEmailDraft } from './classify';
 import { findEmailForLead } from './email';
 import { createGmailDraft } from './gmail';
-import { advanceJob, failJob, initJob, type JobKind } from './redis';
+import { advanceJob, failJob, getJob, initJob, type JobKind } from './redis';
 import { publishBatches, chunk } from './qstash';
 
 type Processor = (userId: string, leadIds: number[]) => Promise<void>;
+
+// A batch is stale if the job it belongs to is no longer running — the user hit
+// Stop, or the match target was reached. Skipping saves the AI spend.
+async function jobStopped(userId: string, kind: JobKind) {
+  return (await getJob(userId, kind)).status !== 'running';
+}
 
 // Kicks off a background job: records the total in Redis, then either publishes
 // batches to QStash (production) or runs them inline after the response (local
 // dev, when QSTASH_DEV_INLINE=true and QStash can't reach localhost).
 export async function startJob(
   userId: string, kind: JobKind, ids: number[],
-  consumerPath: string, flowKey: string, processor: Processor
+  consumerPath: string, flowKey: string, processor: Processor, target = 0
 ) {
-  await initJob(userId, kind, ids.length);
+  await initJob(userId, kind, ids.length, target);
   if (process.env.QSTASH_DEV_INLINE === 'true') {
     for (const batch of chunk(ids)) {
       after(() => processor(userId, batch).catch((e) => console.error('inline job error', e)));
@@ -33,15 +39,18 @@ export async function startJob(
 // records progress in Redis. All DB reads are owner-scoped.
 
 export async function processClassifyBatch(userId: string, leadIds: number[]) {
+  if (await jobStopped(userId, 'classify')) return;
   const s = await getResolvedSettings(userId);
-  let done = 0, errors = 0, lastError: string | undefined;
+  let done = 0, found = 0, errors = 0, lastError: string | undefined;
   for (const id of leadIds) {
     const lead = (await db.select().from(leads).where(and(eq(leads.id, id), eq(leads.ownerId, userId))).limit(1))[0];
     if (!lead) { done++; continue; }
     try {
       const v = await classifyLead(s, lead, s.targetDescription);
-      // Only auto-qualify grounded, strong matches — never a low-confidence guess.
-      const autoQualify = v.fit !== 'none' && v.score >= 60 && v.confidence !== 'low' && lead.stage === 'new';
+      // Only count/auto-qualify grounded, strong matches — never a low-confidence guess.
+      const strongMatch = v.fit !== 'none' && v.score >= 60 && v.confidence !== 'low';
+      if (strongMatch) found++;
+      const autoQualify = strongMatch && lead.stage === 'new';
       await db.update(leads).set({
         aiFit: v.fit, aiScore: v.score, aiCompany: v.company, aiRole: v.role,
         aiReasoning: v.reasoning, aiConfidence: v.confidence, aiEvidence: v.evidence,
@@ -53,10 +62,11 @@ export async function processClassifyBatch(userId: string, leadIds: number[]) {
     }
     done++;
   }
-  await advanceJob(userId, 'classify', { done, errors, lastError });
+  await advanceJob(userId, 'classify', { done, found, errors, lastError });
 }
 
 export async function processEmailBatch(userId: string, leadIds: number[]) {
+  if (await jobStopped(userId, 'email')) return;
   const s = await getResolvedSettings(userId);
   let done = 0, found = 0, errors = 0, lastError: string | undefined;
   for (const id of leadIds) {
@@ -78,6 +88,7 @@ export async function processEmailBatch(userId: string, leadIds: number[]) {
 }
 
 export async function processGmailBatch(userId: string, leadIds: number[]) {
+  if (await jobStopped(userId, 'gmail')) return;
   const s = await getResolvedSettings(userId);
   let done = 0, drafted = 0, errors = 0, lastError: string | undefined;
   for (const id of leadIds) {

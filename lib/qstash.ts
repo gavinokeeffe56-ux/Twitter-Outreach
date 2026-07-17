@@ -18,13 +18,16 @@ export async function publishBatches(path: string, userId: string, ids: number[]
   // QStash flow-control keys only allow [A-Za-z0-9._-]; a colon separator is
   // rejected, so join with a hyphen and strip anything else out of the userId.
   const key = `${flowKey}-${userId}`.replace(/[^A-Za-z0-9._-]/g, '-');
-  await qstash.batchJSON(
-    batches.map((leadIds) => ({
-      url,
-      body: { userId, leadIds },
-      flowControl: { key, parallelism: 5, ratePerSecond: 5 },
-      retries: 3
-    }))
-  );
+  const messages = batches.map((leadIds) => ({
+    url,
+    body: { userId, leadIds },
+    flowControl: { key, parallelism: 5, ratePerSecond: 5 },
+    retries: 3
+  }));
+  // Publish in slices — a big run can be thousands of messages, too large for
+  // one batch request.
+  for (let i = 0; i < messages.length; i += 100) {
+    await qstash.batchJSON(messages.slice(i, i + 100));
+  }
   return batches.length;
 }

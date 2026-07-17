@@ -24,7 +24,7 @@ export const scoreClass = (n?: number | null) => (n ?? 0) >= 60 ? 'hi' : (n ?? 0
 interface Props { userEmail: string; userImage: string; signOutAction: () => Promise<void>; }
 type View = 'leads' | 'board' | 'dm' | 'email' | 'api' | 'usage';
 interface Filters { search: string; stage: string; fit: string; classified: string; sort: string; strong: string; }
-interface JobState { status: string; total: number; done: number; found: number; drafted: number; errors: number; lastError: string | null; }
+interface JobState { status: string; total: number; done: number; found: number; drafted: number; target: number; errors: number; lastError: string | null; }
 
 export default function Dashboard({ userEmail, userImage, signOutAction }: Props) {
   const [view, setView] = useState<View>('leads');
@@ -39,6 +39,7 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
   const [showDesc, setShowDesc] = useState('');
   const [setupOpen, setSetupOpen] = useState(false);
   const [findEst, setFindEst] = useState<{ count: number; cost: number | null; model: string } | null>(null);
+  const [findCount, setFindCount] = useState(200);
   const [banner, setBanner] = useState<{ kind: string; job: JobState } | null>(null);
   const [showImport, setShowImport] = useState(true);
   const [importing, setImporting] = useState<string | null>(null);
@@ -73,10 +74,11 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
   useEffect(() => {
     api('/api/settings').then((s) => { setTarget(s.targetDescription || ''); setShowName(s.showName || ''); setShowDesc(s.showDescription || ''); }).catch(() => {});
   }, []);
+  const poolFor = (n: number) => Math.max(1000, Math.min(20000, n * 10));
   const refreshFindEst = useCallback(async () => {
-    try { const e = await api('/api/classify?minHScore=15&limit=1500'); setFindEst({ count: e.count, cost: e.estimatedCostUSD ?? null, model: e.model }); }
+    try { const e = await api(`/api/classify?minHScore=15&limit=${poolFor(findCount || 200)}`); setFindEst({ count: e.count, cost: e.estimatedCostUSD ?? null, model: e.model }); }
     catch { setFindEst(null); }
-  }, []);
+  }, [findCount]);
   useEffect(() => { refreshFindEst(); }, [stats, refreshFindEst]);
 
   // ---- job polling ----
@@ -96,6 +98,7 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
           if (j.status === 'error') alert(`Job stopped: ${j.lastError}`);
           else if (activeKind.current === 'email') alert(`Email hunt finished — found ${j.found} of ${j.total} scanned.`);
           else if (activeKind.current === 'gmail') alert(`Gmail push finished — ${j.drafted} of ${j.total} saved to Drafts${j.errors ? ` (${j.errors} errors)` : ''}.`);
+          else if (activeKind.current === 'classify') alert(`Find finished — ${j.found} strong matches${j.target ? ` (target: ${j.target})` : ''}. Download them with Export → Top matches.`);
           setBanner(null);
           refresh();
         }
@@ -174,7 +177,7 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
     try {
       // Save the search context (target + show), then kick off the grounded find.
       await api('/api/settings', { method: 'PUT', body: JSON.stringify({ targetDescription: target, showName, showDescription: showDesc }) });
-      await api('/api/classify', { method: 'POST', body: JSON.stringify({ minHScore: 15, limit: 1500 }) });
+      await api('/api/classify', { method: 'POST', body: JSON.stringify({ minHScore: 15, count: findCount || 0, limit: 1500 }) });
       watchJob();
     } catch (err) { alert((err as Error).message); }
   };
@@ -209,14 +212,14 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
           <h1 className="page-title">{NAV.find((n) => n[0] === view)?.[2]}</h1>
           <div className="topbar-actions">
             {stats?.total ? <span className="chip">{stats.total.toLocaleString()} leads · {stats.classified.toLocaleString()} analyzed</span> : null}
-            <a href="/api/export" className="btn ghost small" download><Icon name="download" size={14} /> Export</a>
+            <ExportMenu count={findCount || 200} />
           </div>
         </div>
 
       {banner && (
         <div className="job-banner">
           <span>
-            {banner.kind === 'classify' ? `Classifying: ${banner.job.done}/${banner.job.total}`
+            {banner.kind === 'classify' ? `Analyzing: ${banner.job.done}/${banner.job.total} · ${banner.job.found} matches found${banner.job.target ? ` of ${banner.job.target} wanted` : ''}`
               : banner.kind === 'email' ? `Hunting emails: ${banner.job.done}/${banner.job.total} · ${banner.job.found} found`
               : `Pushing to Gmail: ${banner.job.done}/${banner.job.total} · ${banner.job.drafted} saved`}
           </span>
@@ -237,8 +240,14 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
               placeholder="e.g. Category-leading AI, dev-tools, or fintech startups that would be a great sponsor for MTS" />
             <div className="hero-row">
               <button className="btn primary" onClick={runFind} disabled={!stats?.total || !target.trim()}><Icon name="sparkle" size={15} /> Find best leads</button>
+              <label className="count-ctl" title="The AI stops as soon as it has found this many strong matches — you only pay for what it scans.">
+                stop after <input type="number" min={10} max={5000} step={10} value={findCount || ''}
+                  onChange={(e) => setFindCount(Math.max(0, Math.min(5000, Math.floor(Number(e.target.value)) || 0)))} /> matches
+              </label>
               {!stats?.total ? <span className="est">↑ Import a list first</span>
-                : findEst && findEst.count > 0 ? <span className="est">Analyzes {findEst.count.toLocaleString()} profiles{findEst.cost != null ? ` · est. ~$${findEst.cost}` : ''} · reads their websites · runs in the background</span>
+                : findEst && findEst.count > 0 ? <span className="est">{findCount
+                    ? `Scans up to ${findEst.count.toLocaleString()} profiles (best signals first), stops at ${findCount} matches${findEst.cost != null ? ` · max ~$${findEst.cost}` : ''}`
+                    : `Analyzes ${findEst.count.toLocaleString()} profiles${findEst.cost != null ? ` · est. ~$${findEst.cost}` : ''} · reads their websites`}</span>
                 : findEst && findEst.count === 0 ? <span className="est">Every matching profile is already analyzed — sort by AI score below to see the best. Import more to find new ones.</span>
                 : null}
               <span className="spacer" />
@@ -328,6 +337,29 @@ export default function Dashboard({ userEmail, userImage, signOutAction }: Props
         <>
           <div className="drawer-backdrop" onClick={() => { setOpenLead(null); refresh(); }} />
           <LeadDrawer lead={openLead} onChanged={refresh} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Export menu: download the results as a spreadsheet (CSV) ----
+function ExportMenu({ count }: { count: number }) {
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+  return (
+    <div className="export-menu">
+      <button className="btn ghost small" onClick={() => setOpen((o) => !o)}><Icon name="download" size={14} /> Export ▾</button>
+      {open && (
+        <>
+          <div className="menu-backdrop" onClick={close} />
+          <div className="menu">
+            <a href={`/api/export?best=${count}`} download onClick={close}>Top {count} matches</a>
+            <a href={`/api/export?best=${count}&fit=sponsor`} download onClick={close}>Top {count} sponsors</a>
+            <a href={`/api/export?best=${count}&fit=guest`} download onClick={close}>Top {count} guests</a>
+            <a href="/api/export" download onClick={close}>All leads</a>
+            <div className="menu-note">CSV spreadsheet — opens in Excel &amp; Google Sheets</div>
+          </div>
         </>
       )}
     </div>

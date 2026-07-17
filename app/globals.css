@@ -113,6 +113,16 @@ body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI",
 .hero textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 .hero-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
 .hero .est { color: var(--muted); font-size: 13px; }
+.count-ctl { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); font-weight: 500; white-space: nowrap; }
+.count-ctl input { width: 74px; padding: 7px 9px; text-align: center; font-weight: 600; }
+
+/* Export dropdown */
+.export-menu { position: relative; }
+.menu-backdrop { position: fixed; inset: 0; z-index: 19; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 220px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.18); overflow: hidden; padding: 4px; }
+.menu a { display: block; padding: 8px 12px; border-radius: 7px; color: var(--text); text-decoration: none; font-size: 13px; font-weight: 500; }
+.menu a:hover { background: var(--accent-soft); color: var(--accent); }
+.menu-note { padding: 7px 12px 5px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); margin-top: 4px; }
 .search-setup { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
 .search-setup label { font-size: 13px; font-weight: 500; display: block; }
 .search-setup input, .search-setup textarea { width: 100%; margin-top: 5px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
