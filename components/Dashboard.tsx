@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import LeadDrawer, { type Lead } from './LeadDrawer';
 import { Icon } from './icons';
+import { DEFAULT_DM_TEMPLATE, DEFAULT_EMAIL_TEMPLATE, DEFAULT_PROOF_POINTS } from '@/lib/defaults';
 
 const STAGES: [string, string][] = [
   ['new', 'New'], ['qualified', 'Qualified'], ['contacted', 'Contacted'],
@@ -404,10 +405,14 @@ function Board({ onOpen, onChanged }: { onOpen: (l: Lead) => void; onChanged: ()
   );
 }
 
-// ---- Template editor (DM / Email) with live preview ----
+// ---- Template editor (DM / Email): guided steps + live preview ----
 const SAMPLE_NAME = 'Sarah';
+const TOKENS: { token: string; label: string; desc: string }[] = [
+  { token: '[name]', label: '[name]', desc: 'their first name' },
+  { token: '[proof points]', label: '[proof points]', desc: 'your best traction bullets' }
+];
 
-function TemplatePanel({ channel }: { channel: 'dm' | 'email' }) {
+export function TemplatePanel({ channel }: { channel: 'dm' | 'email' }) {
   const [loaded, setLoaded] = useState(false);
   const [tpl, setTpl] = useState('');
   const [points, setPoints] = useState<string[]>([]);
@@ -442,9 +447,27 @@ function TemplatePanel({ channel }: { channel: 'dm' | 'email' }) {
     setSaved('Saved ✓'); setTimeout(() => setSaved(''), 2000);
   };
 
-  const preview = tpl
-    .replace(/\[name\]/gi, SAMPLE_NAME)
-    .replace(/\[proof points\]/gi, points.slice(0, count).map((p) => '• ' + p).join('\n'));
+  const resetDefault = () => {
+    if (!confirm('Replace your template with the default MTS one?')) return;
+    setTpl(channel === 'dm' ? DEFAULT_DM_TEMPLATE : DEFAULT_EMAIL_TEMPLATE);
+    if (!points.filter((p) => p.trim()).length) setPoints(DEFAULT_PROOF_POINTS);
+  };
+
+  // Render the preview with tokens substituted AND highlighted, so it's obvious
+  // which parts get personalized per recipient.
+  const previewNodes = () => {
+    const parts = tpl.split(/(\[name\]|\[proof points\])/gi);
+    if (!tpl.trim()) return <span className="muted">Your message will render here as you type…</span>;
+    return parts.map((p, i) => {
+      if (/^\[name\]$/i.test(p)) return <mark key={i} className="tok">{SAMPLE_NAME}</mark>;
+      if (/^\[proof points\]$/i.test(p)) {
+        const used = points.filter((x) => x.trim()).slice(0, count);
+        return <mark key={i} className="tok">{used.length ? used.map((pt) => '• ' + pt).join('\n') : '• (add proof points in step 2)'}</mark>;
+      }
+      return p;
+    });
+  };
+  const missing = TOKENS.filter((t) => !tpl.toLowerCase().includes(t.token));
 
   if (!loaded) return <main className="view"><p className="muted">Loading…</p></main>;
 
@@ -452,124 +475,190 @@ function TemplatePanel({ channel }: { channel: 'dm' | 'email' }) {
     <main className="view">
       <div className="tpl-layout">
         <div className="tpl-editor">
-          <p className="muted" style={{ marginTop: 0 }}>{channel === 'dm'
-            ? 'Short template for X DMs. The AI personalizes it per person and picks the best proof points for them.'
-            : 'Longer template for cold email. The AI also writes a specific subject line per recipient.'}</p>
-
-          {channel === 'email' && (
-            <div className="fld"><div className="fld-head"><span>Your name <span className="muted">(signs off emails &amp; DMs)</span></span></div>
-              <input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="e.g. Gavin O'Keeffe" /></div>
-          )}
-
-          <div className="fld">
-            <div className="fld-head">
-              <span>Template</span>
-              <div className="token-btns">
-                <button className="chip-btn" onClick={() => insert('[name]')}>+ [name]</button>
-                <button className="chip-btn" onClick={() => insert('[proof points]')}>+ [proof points]</button>
-              </div>
+          <div className="tpl-card">
+            <div className="step-head"><span className="step-num">1</span><h3>Write your message</h3></div>
+            <p className="muted" style={{ margin: '0 0 12px' }}>{channel === 'dm'
+              ? 'Short and casual — it’s an X DM. The AI personalizes it per person.'
+              : 'Your cold email. The AI personalizes it per person and writes a unique subject line for each.'}</p>
+            <div className="tok-palette">
+              {TOKENS.map((t) => (
+                <button key={t.token} className="tok-chip" onClick={() => insert(t.token)} title="Insert at cursor">
+                  <b>+ {t.label}</b><span>{t.desc}</span>
+                </button>
+              ))}
             </div>
-            <textarea ref={taRef} rows={channel === 'dm' ? 9 : 13} value={tpl} onChange={(e) => setTpl(e.target.value)} placeholder="Write your template. Use the buttons above to drop in [name] and [proof points]." />
+            <textarea ref={taRef} rows={channel === 'dm' ? 9 : 13} value={tpl} onChange={(e) => setTpl(e.target.value)}
+              placeholder="Write your message. Click the chips above to drop in the personalized parts." />
+            {missing.length > 0 && tpl.trim() ? (
+              <p className="tok-hint">Tip: add {missing.map((m) => <code key={m.token}>{m.token}</code>).reduce((a: any[], c, i) => i ? [...a, ' and ', c] : [c], [])} so each message gets personalized.</p>
+            ) : null}
+            {channel === 'email' && (
+              <label className="tpl-sig">Signs off as
+                <input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="e.g. Gavin O'Keeffe" />
+              </label>
+            )}
           </div>
 
-          <div className="fld">
-            <div className="fld-head"><span>Proof points <span className="muted">— the AI picks the best few per person</span></span></div>
+          <div className="tpl-card">
+            <div className="step-head"><span className="step-num">2</span><h3>Your proof points</h3>
+              <span className="muted" style={{ marginLeft: 'auto' }}>AI picks the best {count} for each person</span></div>
             <div className="pp-list">
               {points.map((p, i) => (
                 <div className="pp-row" key={i}>
-                  <input value={p} onChange={(e) => { const c = [...points]; c[i] = e.target.value; setPoints(c); }} placeholder="A traction proof point…" />
+                  <span className="pp-num">{i + 1}</span>
+                  <input value={p} onChange={(e) => { const c = [...points]; c[i] = e.target.value; setPoints(c); }} placeholder="A traction proof point — numbers work best" />
                   <button className="pp-del" onClick={() => setPoints(points.filter((_, j) => j !== i))} title="Remove">✕</button>
                 </div>
               ))}
-              <button className="chip-btn" onClick={() => setPoints([...points, ''])}>+ Add proof point</button>
             </div>
-            <label className="pp-count">Use <input type="number" min={1} max={8} value={count} onChange={(e) => setCount(Number(e.target.value))} /> per message</label>
+            <div className="pp-foot">
+              <button className="chip-btn" onClick={() => setPoints([...points, ''])}>+ Add proof point</button>
+              <label className="pp-count">Use
+                <input type="number" min={1} max={8} value={count} onChange={(e) => setCount(Math.max(1, Math.min(8, Number(e.target.value) || 4)))} />
+                per message</label>
+            </div>
           </div>
 
           <div className="tpl-save">
-            <button className="btn primary" onClick={save}>Save template</button> <span className="muted">{saved}</span>
+            <button className="btn primary" onClick={save}><Icon name="check" size={14} /> Save template</button>
+            <span className="save-ok">{saved}</span>
+            <span className="spacer" />
+            <button className="btn ghost small" onClick={resetDefault}>Reset to default</button>
           </div>
         </div>
 
         <div className="tpl-preview">
-          <div className="preview-label">Preview</div>
-          <div className={`preview-card ${channel}`}>
-            {channel === 'email' && <div className="preview-subject">Subject <span className="muted">— AI writes this per recipient</span></div>}
-            <div className="preview-body">{preview || <span className="muted">Your template will render here…</span>}</div>
-          </div>
-          <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>Sample uses &quot;{SAMPLE_NAME}&quot; and your top {count} proof points. The real send is tailored to each person.</p>
+          <div className="step-head"><span className="step-num">3</span><h3>Live preview</h3></div>
+          {channel === 'email' ? (
+            <div className="preview-card email">
+              <div className="preview-meta"><span className="muted">To</span> sarah@acme.com</div>
+              <div className="preview-meta"><span className="muted">Subject</span> <em className="muted">AI writes one per recipient</em></div>
+              <div className="preview-body">{previewNodes()}</div>
+            </div>
+          ) : (
+            <div className="dm-thread">
+              <div className="dm-bubble"><div className="preview-body">{previewNodes()}</div></div>
+              <div className="dm-meta">Sent from your X account</div>
+            </div>
+          )}
+          <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}><mark className="tok" style={{ padding: '0 4px' }}>Highlighted</mark> parts are personalized per recipient — this sample uses &quot;{SAMPLE_NAME}&quot; and your top {count} proof points.</p>
         </div>
       </div>
     </main>
   );
 }
 
-// ---- API hub ----
-function ApiHubPanel() {
+// ---- API hub: one card per service ----
+function StatusPill({ state, label }: { state: 'ok' | 'warn' | 'off'; label: string }) {
+  return <span className={`pill ${state}`}>{label}</span>;
+}
+
+export function ApiHubPanel() {
   const [s, setS] = useState<any>(null);
-  const [saved, setSaved] = useState('');
+  const [savedCard, setSavedCard] = useState('');
   const load = useCallback(async () => setS(await api('/api/settings')), []);
   useEffect(() => { load(); }, [load]);
 
   const field = (k: string) => ({ value: s?.[k] ?? '', onChange: (e: any) => setS({ ...s, [k]: e.target.value }) });
-  const save = async () => {
-    await api('/api/settings', { method: 'PUT', body: JSON.stringify(s) });
-    setS({ ...s, anthropicKey: '', openaiKey: '', hunterKey: '', tombaKey: '', tombaSecret: '' });
-    setSaved('Saved ✓'); setTimeout(() => setSaved(''), 2000);
+  const saveCard = async (card: string, keys: string[]) => {
+    const body: Record<string, unknown> = {};
+    for (const k of keys) body[k] = s[k];
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+    setS((cur: any) => ({ ...cur, anthropicKey: '', openaiKey: '', hunterKey: '', tombaKey: '', tombaSecret: '' }));
+    setSavedCard(card); setTimeout(() => setSavedCard(''), 2000);
     load();
   };
+  const saveBtn = (card: string, keys: string[]) => (
+    <div className="api-foot">
+      <button className="btn primary small" onClick={() => saveCard(card, keys)}>Save</button>
+      <span className="save-ok">{savedCard === card ? 'Saved ✓' : ''}</span>
+    </div>
+  );
 
   if (!s) return <main className="view"><p className="muted">Loading…</p></main>;
 
+  const aiReady = s.provider === 'anthropic' ? s.hasAnthropicKey : Boolean(s.openaiBaseUrl && s.openaiModel);
+
   return (
     <main className="view">
-        <div className="settings-form">
-          <>
-              <h2>AI model</h2>
-              <label>Provider
-                <select {...field('provider')}>
-                  <option value="anthropic">Anthropic (Claude) — recommended</option>
-                  <option value="openai">OpenAI-compatible (Ollama, Groq, Together…)</option>
+      <p className="muted" style={{ margin: '0 0 14px' }}>Each service the app talks to, in one place. Only the AI model is required — everything else is optional.</p>
+      <div className="api-grid">
+
+        <section className="api-card">
+          <div className="api-card-head">
+            <span className="api-ic"><Icon name="sparkle" size={17} /></span>
+            <div><h3>AI model</h3><span className="api-tag">Required · powers lead analysis &amp; drafts</span></div>
+            <StatusPill state={aiReady ? 'ok' : 'warn'} label={aiReady ? 'Connected' : 'Key needed'} />
+          </div>
+          <p className="api-desc">Reads every profile and website, ranks your best matches, and writes your personalized DMs and emails.</p>
+          <label>Provider
+            <select {...field('provider')}>
+              <option value="anthropic">Anthropic (Claude) — recommended</option>
+              <option value="openai">OpenAI-compatible (Ollama, Groq, Together…)</option>
+            </select>
+          </label>
+          {s.provider === 'anthropic' ? (
+            <>
+              <label>Model
+                <select {...field('model')}>
+                  <option value="claude-opus-4-8">Claude Opus 4.8 — best judgment ($5/$25 per MTok)</option>
+                  <option value="claude-sonnet-5">Claude Sonnet 5 — balanced ($3/$15 per MTok)</option>
+                  <option value="claude-haiku-4-5">Claude Haiku 4.5 — cheapest for bulk ($1/$5 per MTok)</option>
                 </select>
               </label>
-              {s.provider === 'anthropic' ? (
-                <>
-                  <label>Model
-                    <select {...field('model')}>
-                      <option value="claude-opus-4-8">Claude Opus 4.8 — best judgment ($5/$25 per MTok)</option>
-                      <option value="claude-sonnet-5">Claude Sonnet 5 — balanced ($3/$15 per MTok)</option>
-                      <option value="claude-haiku-4-5">Claude Haiku 4.5 — cheapest for bulk ($1/$5 per MTok)</option>
-                    </select>
-                  </label>
-                  <label>Anthropic API key <span className="muted">{s.hasAnthropicKey ? '· configured ✓' : '· required to run the AI'}</span>
-                    <input type="password" value={s.anthropicKey ?? ''} onChange={(e) => setS({ ...s, anthropicKey: e.target.value })} placeholder="sk-ant-… (leave blank to keep current)" /></label>
-                </>
-              ) : (
-                <>
-                  <label>Base URL<input {...field('openaiBaseUrl')} placeholder="http://localhost:11434/v1" /></label>
-                  <label>Model name<input {...field('openaiModel')} placeholder="llama-3.3-70b-versatile" /></label>
-                  <label>API key <span className="muted">{s.hasOpenaiKey ? '· configured ✓' : ''}</span>
-                    <input type="password" value={s.openaiKey ?? ''} onChange={(e) => setS({ ...s, openaiKey: e.target.value })} placeholder="Not needed for local Ollama" /></label>
-                </>
-              )}
+              <label>API key <span className="muted">{s.hasAnthropicKey ? '· saved ✓ (leave blank to keep)' : <>· <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">get one ↗</a></>}</span>
+                <input type="password" value={s.anthropicKey ?? ''} onChange={(e) => setS({ ...s, anthropicKey: e.target.value })} placeholder="sk-ant-…" /></label>
+            </>
+          ) : (
+            <>
+              <label>Base URL<input {...field('openaiBaseUrl')} placeholder="http://localhost:11434/v1" /></label>
+              <label>Model name<input {...field('openaiModel')} placeholder="llama-3.3-70b-versatile" /></label>
+              <label>API key <span className="muted">{s.hasOpenaiKey ? '· saved ✓' : '· not needed for local Ollama'}</span>
+                <input type="password" value={s.openaiKey ?? ''} onChange={(e) => setS({ ...s, openaiKey: e.target.value })} placeholder="sk-…" /></label>
+            </>
+          )}
+          {saveBtn('ai', ['provider', 'model', 'openaiBaseUrl', 'openaiModel', 'anthropicKey', 'openaiKey'])}
+        </section>
 
-              <h2>Email finders <span className="muted">(optional)</span></h2>
-              <p className="muted">Bio + website scanning is built in and free. Add a finder to look up emails by name + company domain — the app tries Hunter first, then Tomba.</p>
-              <label>Hunter.io API key <span className="muted">{s.hasHunterKey ? '· configured ✓' : '· free tier: 25/mo'} · <a href="https://hunter.io" target="_blank" rel="noopener noreferrer">get key ↗</a></span>
-                <input type="password" value={s.hunterKey ?? ''} onChange={(e) => setS({ ...s, hunterKey: e.target.value })} placeholder="Leave blank to skip" /></label>
-              <label>Tomba.io API key <span className="muted">{s.hasTombaKey ? '· configured ✓' : '· free tier: 25/mo'} · <a href="https://tomba.io" target="_blank" rel="noopener noreferrer">get key ↗</a></span>
-                <input type="password" value={s.tombaKey ?? ''} onChange={(e) => setS({ ...s, tombaKey: e.target.value })} placeholder="ta_… (key)" /></label>
-              <label>Tomba.io secret
-                <input type="password" value={s.tombaSecret ?? ''} onChange={(e) => setS({ ...s, tombaSecret: e.target.value })} placeholder="ts_… (secret)" /></label>
-
-              <h2>Gmail</h2>
-              <p className="muted">{s.gmailConnected ? 'Connected ✓ — drafts save to your Gmail Drafts folder.' : 'Not connected — sign out and back in, and grant Gmail access.'}</p>
-          </>
-
-          <div style={{ marginTop: 20 }}>
-            <button className="btn primary" onClick={save}>Save</button> <span className="muted">{saved}</span>
+        <section className="api-card">
+          <div className="api-card-head">
+            <span className="api-ic"><Icon name="draft" size={17} /></span>
+            <div><h3>Gmail</h3><span className="api-tag">Drafts, ready to send</span></div>
+            <StatusPill state={s.gmailConnected ? 'ok' : 'warn'} label={s.gmailConnected ? 'Connected' : 'Not connected'} />
           </div>
-        </div>
+          <p className="api-desc">Saves each AI-written email straight into your Gmail Drafts folder — you review and hit send from Gmail.</p>
+          <p className="api-desc">{s.gmailConnected
+            ? 'Connected via your Google login. Nothing to configure.'
+            : 'Sign out, sign back in with Google, and allow the “compose drafts” permission when asked.'}</p>
+        </section>
+
+        <section className="api-card">
+          <div className="api-card-head">
+            <span className="api-ic"><Icon name="search" size={17} /></span>
+            <div><h3>Hunter.io</h3><span className="api-tag">Email finder · optional</span></div>
+            <StatusPill state={s.hasHunterKey ? 'ok' : 'off'} label={s.hasHunterKey ? 'Connected' : 'Optional'} />
+          </div>
+          <p className="api-desc">Looks up work emails by name + company domain when the free bio &amp; website scan comes up empty. Tried first. Free tier: 25 lookups/mo.</p>
+          <label>API key <span className="muted">{s.hasHunterKey ? '· saved ✓ (leave blank to keep)' : <>· <a href="https://hunter.io/api-keys" target="_blank" rel="noopener noreferrer">get key ↗</a></>}</span>
+            <input type="password" value={s.hunterKey ?? ''} onChange={(e) => setS({ ...s, hunterKey: e.target.value })} placeholder="Leave blank to skip" /></label>
+          {saveBtn('hunter', ['hunterKey'])}
+        </section>
+
+        <section className="api-card">
+          <div className="api-card-head">
+            <span className="api-ic"><Icon name="email" size={17} /></span>
+            <div><h3>Tomba.io</h3><span className="api-tag">Email finder · optional</span></div>
+            <StatusPill state={s.hasTombaKey ? 'ok' : 'off'} label={s.hasTombaKey ? 'Connected' : 'Optional'} />
+          </div>
+          <p className="api-desc">Backup email finder — used when Hunter doesn&apos;t find a match. Needs both a key and a secret. Free tier: 25 lookups/mo.</p>
+          <label>API key <span className="muted">{s.hasTombaKey ? '· saved ✓' : <>· <a href="https://app.tomba.io/keys/api" target="_blank" rel="noopener noreferrer">get key ↗</a></>}</span>
+            <input type="password" value={s.tombaKey ?? ''} onChange={(e) => setS({ ...s, tombaKey: e.target.value })} placeholder="ta_…" /></label>
+          <label>Secret
+            <input type="password" value={s.tombaSecret ?? ''} onChange={(e) => setS({ ...s, tombaSecret: e.target.value })} placeholder="ts_…" /></label>
+          {saveBtn('tomba', ['tombaKey', 'tombaSecret'])}
+        </section>
+
+      </div>
     </main>
   );
 }
